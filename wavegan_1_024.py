@@ -41,14 +41,29 @@ class MyConvTranspose1d(nn.Module):
         self.upsample_layer = F.interpolate
         reflection_pad = kernel_size // 2
         self.reflection_pad = nn.ConstantPad1d(reflection_pad, value=0)
-        self.conv1d = torch.nn.Conv1d(in_channels, out_channels, kernel_size, stride)
-        self.convtrans1d = nn.ConvTranspose1d(in_channels, out_channels, kernel_size, stride, padding, output_padding)
+        # I don't want much GPU memory to be consumed. 
+        # Dual initializations contributed to each layer a single more redundant data structure to store.
+        if upsample:
+            self.conv1d = nn.Conv1d(in_channels, out_channels, kernel_size, stride)
+        else:
+            self.convtrans1d = nn.ConvTranspose1d(in_channels, out_channels, kernel_size, stride, padding, output_padding)
+        
+        # initialize parameters
+        self.init_params()
 
     def forward(self, x):
         if self.upsample:
-            return self.conv1d(self.reflection_pad(self.upsample_layer(x, scale_factor=self.upsample)))
+            return self.conv1d(self.reflection_pad(self.upsample_layer(x, scale_factor=self.upsample, mode='linear', align_corners=False)))
         else:
             return self.convtrans1d(x)
+        
+    def init_params(self):
+        # Initalization with uniform Xavier Glorot technique
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d) or isinstance(m, nn.ConvTranspose1d):
+                nn.init.xavier_uniform_(m.weight)
+                # zero the biases
+                #m.bias.data.zero_()
 
 class Generator(nn.Module):
     """
@@ -59,8 +74,6 @@ class Generator(nn.Module):
         k = 25 | s = 4 | p = 11 | out_p = 1
         combination #3
         k = 36 | s = 4 | p = 16
-        combination #4
-        k = 50 | s = 4 | p = ? | out_p = ?
     """
 
     def __init__(self, model_size=64, kernel_size=25, stride=4, padding=11, upsample=True, output_padding=1, post_proc_filt_len=512):
@@ -76,31 +89,26 @@ class Generator(nn.Module):
 
         block1 = [
             nn.Linear(Z_DIM, 4 * 4 * model_size * 16),
-            #nn.BatchNorm1d(4 * 4 * model_size * 16),
             nn.ReLU()
         ]
 
         block2 = [
             MyConvTranspose1d(model_size * 16, model_size * 8, kernel_size, stride, padding, upsample, output_padding),
-            #nn.BatchNorm1d(model_size * 8),
             nn.ReLU()
         ]
 
         block3 = [
             MyConvTranspose1d(model_size * 8, model_size * 4,  kernel_size, stride, padding, upsample, output_padding),
-            #nn.BatchNorm1d(model_size * 4),
             nn.ReLU()
         ]
 
         block4 = [
             MyConvTranspose1d(model_size * 4, model_size * 2,  kernel_size, stride, padding, upsample, output_padding),
-            #nn.BatchNorm1d(model_size * 2),
             nn.ReLU()
         ]
 
         block5 = [
             MyConvTranspose1d(model_size * 2, model_size,      kernel_size, stride, padding, upsample, output_padding),
-            #nn.BatchNorm1d(model_size),
             nn.ReLU()
         ]
 
@@ -117,9 +125,7 @@ class Generator(nn.Module):
         self.main2 = nn.Sequential(*all_blocks)
 
         # Initalization with uniform Xavier Glorot technique
-        for m in self.modules():
-            if isinstance(m, nn.ConvTranspose1d) or isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
+        self.init_params()
 
         # Free some memory
         del all_blocks, block1, block2, block3, block4, block5, block6
@@ -140,6 +146,13 @@ class Generator(nn.Module):
                 pad_right = pad_left
             x = self.ppfilter(F.pad(x, (pad_left, pad_right)))
         return x
+    
+    def init_params(self):
+        for m in self.modules():
+            if isinstance(m, nn.ConvTranspose1d) or isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                # zero the biases
+                #m.bias.data.zero_()
     
     def summary(self):
         x = torch.zeros(BATCH_SIZE, Z_DIM)
@@ -171,9 +184,9 @@ class Generator(nn.Module):
                 print('Out: {} \tLayer: {}'.format(x.size(), layer))
 
 
-#################
+##########
 # Critic #
-#################
+##########
 
 class PhaseShuffle(nn.Module):
     """
@@ -215,6 +228,7 @@ class PhaseShuffle(nn.Module):
         assert x_shuffle.shape == x.shape, "{}, {}".format(x_shuffle.shape, x.shape)
         return x_shuffle
 
+
 class Critic(nn.Module):
     """
     Up scaling by a factor of 4
@@ -237,28 +251,24 @@ class Critic(nn.Module):
 
         block2 = [
             nn.Conv1d(model_size,     model_size * 2,  kernel_size, stride, padding, bias=False),
-            nn.BatchNorm1d(model_size * 2),
             nn.LeakyReLU(leak),
             PhaseShuffle(shift_factor)
         ]
         
         block3 = [
             nn.Conv1d(model_size * 2, model_size * 4,  kernel_size, stride, padding, bias=False),
-            nn.BatchNorm1d(model_size * 4),
             nn.LeakyReLU(leak),
             PhaseShuffle(shift_factor)
         ]
 
         block4 = [
             nn.Conv1d(model_size * 4, model_size * 8,  kernel_size, stride, padding, bias=False),
-            nn.BatchNorm1d(model_size * 8),
             nn.LeakyReLU(leak),
             PhaseShuffle(shift_factor)
         ]
 
         block5 = [
             nn.Conv1d(model_size * 8, model_size * 16, kernel_size, stride, padding, bias=False),
-            nn.BatchNorm1d(model_size * 16),
             nn.LeakyReLU(leak)
         ]
 
@@ -267,9 +277,7 @@ class Critic(nn.Module):
         self.linear = nn.Linear(4 * 4 * model_size * 16, 1, bias=False)
 
         # Initalization with uniform Xavier Glorot technique
-        for m in self.modules():
-            if isinstance(m, nn.Conv1d) or isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
+        self.init_params()
 
         # Free some memory
         del all_blocks, block1, block2, block3, block4, block5
@@ -280,6 +288,13 @@ class Critic(nn.Module):
         x = x.view(-1, self.num_flat_features(x))  # flatten the conv output
         x - self.linear(x)
         return x
+    
+    def init_params(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d) or isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                # zero the biases
+                #m.bias.data.zero_()
 
     def num_flat_features(self, x):
         size = x.size()[1:]  # all dimensions except the batch dimension

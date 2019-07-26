@@ -208,13 +208,14 @@ def train():
             print('saved checkpoints')
 
 def infer(epoch, n=10):
+    g_model_dir = os.path.join(NORM, 'checkpoints', str(SOUND_DIM), DATASET, 'g_model_' + str(epoch) + '.pth')
     try:
-        g_model_dir = os.path.join(NORM, 'checkpoints', str(SOUND_DIM), DATASET, 'g_model_' + str(epoch) + '.pth')
         g_model.load_state_dict(torch.load(g_model_dir, map_location='cpu'))
     except:
-        print("Couldn't load the checkpoint of `g_model`.")
-
+        print(f"Couldn't load the checkpoint of `g_model` at {g_model_dir}")
+    # Put on evaluation mode
     g_model.eval()
+    # Sample iteratively
     for i in range(n):
         with torch.no_grad():
             z_sample = torch.randn(1, Z_DIM).to(device) # Sample prior from Gaussian distribution
@@ -264,5 +265,5 @@ if TRAIN:
     train()
 else:
     # Sample from the GAN-QP
-    infer(epoch=102000, n=10)
+    infer(epoch=5000, n=10)
     #interpolate(epoch=102000, mode='lerp', n_latents=5)

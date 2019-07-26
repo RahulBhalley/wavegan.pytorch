@@ -13,7 +13,7 @@ TRAIN = False
 RESIDUAL = False
 
 # Some other configurations
-DATASET = 'sc09-25-up-pp-xav-uni' # [sc09, birds-songs]
+DATASET = 'sc09-25-up-pp-lin' # [sc09, birds-songs]
 if RESIDUAL:
     DATASET = f'res-{DATASET}'
 N_CHANNELS = 1
